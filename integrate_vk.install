@@ -1,0 +1,28 @@
+<?php
+
+/**
+ * @file
+ * Performs module install and uninstall tasks.
+ *
+ */
+
+// include "integrateVK.php";
+// use \vk_api\API as API;
+// use \vk_api\IntegrateVK as IntegrateVK;
+
+function integrate_vk_enable() {
+   
+} 
+
+
+
+
+
+/**
+ * Implements hook_uninstall().
+ */
+
+function integrate_vk_uninstall() {
+  //variable_del('integrate_vk');
+}
+

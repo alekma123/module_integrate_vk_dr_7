@@ -1,0 +1,498 @@
+<?php
+
+/**
+ * @file
+ * Custom module for add, edit, delete products in vk.
+ * (c) Mirsaitov
+ * 
+ * @author Menshikova
+ */
+ include "integrateVK.php";
+ use \vk_api\IntegrateVK as IntegrateVK;
+
+ // Тип материала для публикации в вк 
+ define("TYPE_NODE_CONTENT", 'car');
+ define("TAXONOMY_VOCABULARY", 'avtobrand');
+ define("ID_NODE_FORM", 'car_node_form');
+ /**
+ * Implements hook_help().
+ */
+function integrate_vk_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#integrate_vk':
+      $output = '';
+      $output .= '<h3>' . t('About') . '</h3>';
+      $output .= '<p>' . t('Интеграция с vk');
+      
+      return $output;   
+  }
+}
+/**
+ * Implements hook_menu().
+ */
+function integrate_vk_menu() {
+    $items['admin/vk_integrate'] = array(
+        'title' => 'VK интеграция',
+        'description' => 'desct',
+        // 'type' => MENU_DEFAULT_LOCAL_TASK,
+        'access callback' => TRUE,
+        'page callback' => 'integrate_vk_admin',
+        'file' => 'integrate_vk.admin.inc',
+    );
+    $items['admin/vk_integrate/config'] = array(
+        'title' => 'VK интеграция. Настройки',
+        'description' => 'Настройки интеграции с вк (товары, заказы).',
+        'page callback' => 'integrate_vk_admin',
+        'access callback' => TRUE, // разрешаем всем просматривать эту страницу
+        'type' => MENU_DEFAULT_LOCAL_TASK, //MENU_LOCAL_TASK,
+        'file' => 'integrate_vk.admin.inc',
+      ); 
+    
+      $items['import/integrate_vk/progress'] = array(
+          'title' => t('Import progress upload products'),
+          'description' => t('upload products progress bar'),
+          'page callback' => 'ajax_upload_products_progressbar_progress',
+          'access callback' => TRUE,
+          'type' => MENU_CALLBACK,
+          'file' => 'integrate_vk.progressbar.inc'
+        );
+        /*$items['admin/vk_integrate/orders'] = array(
+            'title' => 'VK интеграция. Заказы',
+            'description' => 'Список заказов из группы вк.',
+            'page callback' => 'integrate_vk_orders',
+            'access callback' => TRUE, // разрешаем всем просматривать эту страницу
+            'type' => MENU_LOCAL_TASK,
+            'file' => 'integrate_vk.orders.inc',
+        ); */
+        /*$items['admin/test'] = array(
+            'title' => 'Menu test',
+            'description' => 'menu test',
+            'page callback' => 'integrate_vk_test',
+            'access callback' => TRUE,
+            'type' => MENU_LOCAL_TASK,
+            'file' => 'integrate_vk_test.inc',
+        );*/
+
+    return $items;  
+}
+
+/**
+ * Implements hook_node_insert().
+ */
+function integrate_vk_node_insert($node) {
+    if ($node->type == TYPE_NODE_CONTENT) {
+        $message = uploadProduct($node);
+        drupal_set_message($message);
+    }
+};  
+/**
+ * Implements hook_node_delete().
+ */
+function integrate_vk_node_delete($node) {
+    if ($node->type == TYPE_NODE_CONTENT) {
+        $message = delProduct($node);
+        drupal_set_message($message);
+    }
+};
+/**
+ * Implements hook_node_update().
+ */
+function integrate_vk_node_update($node) {
+    if ($node->type == TYPE_NODE_CONTENT) {
+        $upd_node_vk = variable_get("update_node_vk");
+        $upd_node__category_vk = variable_get("update_category_node_vk"); 
+
+        if ($upd_node_vk) {
+            // call fun upd in vk
+            $message = editProduct($node); 
+
+            if ($upd_node__category_vk) {
+                $message .= changeProductCategory($node); 
+            }
+            drupal_set_message($message);
+        }
+        variable_set("update_category_node_vk", false); 
+        variable_set("update_node_vk", false);
+    }
+
+  }
+
+
+/**
+ * Implements hook_form_alter().
+ */
+function integrate_vk_form_alter(&$form, &$form_state, $form_id) {
+
+    if(isset($form['field_integratevk_item_id'])) {
+        $form['field_integratevk_item_id']['#disabled'] = TRUE;
+        }
+    if(isset($form['field_integratevk_album_id'])) {
+        $form['field_integratevk_album_id']['#disabled'] = TRUE;
+        }
+    if(isset($form['field_integratevk_in_album'])) {
+        $form['field_integratevk_in_album']['#disabled'] = TRUE;
+        }
+
+    if ($form_id == ID_NODE_FORM) {
+        $form['#submit'][] = 'update_product_vk_submit';
+    }    
+   // dsm($form_id);    
+}
+
+// Обновить описание продукта в вк
+function update_product_vk_submit(&$form, $form_state) {
+  if(!isset($form['field_brend_avto']['und']['#default_value'][0])) {
+    variable_set("update_node_vk", true);
+    return ;
+  }
+    $old_val_brend_avto = $form['field_brend_avto']['und']['#default_value'][0];
+    $new_val_brend_avto = $form['field_brend_avto']['und']['#value']; 
+    // проаверка на то, что изменили подборку товара
+    if ($old_val_brend_avto !== $new_val_brend_avto) {
+        $old_val_album_id = array();
+        $new_val_album_id = array();
+
+        $old_val_album_id[] = getAlbum_id_vk($old_val_brend_avto);
+        $new_val_album_id[] = getAlbum_id_vk($new_val_brend_avto);
+        // store vars for hook_node_update
+        variable_set("old_val_album_id", $old_val_album_id);
+        variable_set("new_val_album_id", $new_val_album_id);
+        
+        // если подборку товара изменили, то разрешить изменить подборку товара в вк
+        variable_set("update_category_node_vk", true);       
+    }
+    // внести изменения в вк, если эти изменени были внесены в форме редактировния ноды 
+    variable_set("update_node_vk", true);
+} 
+
+/**
+ * Functions for config
+ */
+//-------------------------------------------------------
+function getObjIntegrateVK() {
+    $propertiesIntegrateVK = variable_get("propertiesIntegrateVK");
+    $GROUP_ID = $propertiesIntegrateVK->group_id;
+    $USER_ID = $propertiesIntegrateVK->user_id;
+    $ACCESS_TOKEN = $propertiesIntegrateVK->access_token;
+    $CATEGORY_ID = $propertiesIntegrateVK->category_id;
+    
+    $IntegrateVK = new IntegrateVK($GROUP_ID, $USER_ID, $ACCESS_TOKEN, $CATEGORY_ID);
+    
+    return $IntegrateVK;
+    }
+
+function getProductTitle($node) {
+    $title =  $node->title;
+    $yearRelease = $node->field_yearavto['und'][0]['value'];
+    $output = $title . ' ' . $yearRelease;
+    return $output;
+}
+
+function getProductDescriprion($node) {
+    $output = null;
+    if (isset($node->field_yearavto['und'][0]['value'])) {
+        $output .= 'Год выпуска: ' . $node->field_yearavto['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_brend_avto['und'][0]['tid'])) {
+        $output .= 'Марка: ' . getNameByTid($node->field_brend_avto['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_model['und'][0]['tid'])) {
+        $output .= 'Модель: ' . getNameByTid($node->field_model['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_mileage['und'][0]['tid'])) {
+        $output .= 'Пробег: ' . $node->field_mileage['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_typeavto['und'][0]['tid'])) {
+        $output .= 'Тип кузова: ' . getNameByTid($node->field_typeavto['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_motor['und'][0]['tid'])) {
+        $output .= 'Двигатель: ' . getNameByTid($node->field_motor['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_power['und'][0]['tid'])) {
+        $output .= 'Мощность двигателя: ' . $node->field_power['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_cpp['und'][0]['tid'])) {
+        $output .= 'КПП: ' . getNameByTid($node->field_cpp['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_drive['und'][0]['tid'])) {
+        $output .= 'Привод: ' . getNameByTid($node->field_drive['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_color['und'][0]['tid'])) {
+        $output .= 'Цвет: ' . getNameByTid($node->field_color['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_salon['und'][0]['tid'])) {
+        $output .= 'Салон: ' . getNameByTid($node->field_salon['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_youtube['und'][0]['value'])) {
+        $output .= 'Ссылка на youtube: ' . $node->field_youtube['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_place['und'][0]['value'])) {
+        $output .= 'Количество мест: ' . $node->field_place['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_complect['und'][0]['value'])) {
+        $output .= 'Комплектация: ' . $node->field_complect['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_capacityavto['und'][0]['value'])) {
+        $output .= 'Объем двигателя: ' . $node->field_capacityavto['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_steering_wheel['und'][0]['tid'])) {
+        $output .= 'Положение руля: ' . getNameByTid($node->field_steering_wheel['und'][0]['tid']);
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_version['und'][0]['value'])) {
+        $output .= 'Версия: ' . $node->field_version['und'][0]['value'];
+        $output .= PHP_EOL;
+    }
+    if (isset($node->field_dop_avto['und'][0]['value'])) {
+        $output .= 'Дополнительная информация: ' . strip_tags($node->field_dop_avto['und'][0]['value']);
+        $output .= PHP_EOL;
+    }
+    return $output;
+}
+
+function getProductPrice($node) {
+    $price = 0; 
+    if (isset($node->field_price["und"][0]["value"])) {
+        $price = $node->field_price["und"][0]["value"];     
+    }  
+    return $price;  
+}
+
+
+function getProductImg($node) {
+    $imgArray = array();
+    $max_files = 4;
+    $i = 0;
+    $output = "<ul>";
+
+    if (isset($node->field_avtofoto["und"])) {
+        $imgs = $node->field_avtofoto["und"];
+        foreach($imgs as $img){
+            $imgArray[] = drupal_realpath($img['uri']);
+            $output .= "<li><a href=" . file_create_url($img['uri']) . "> ". file_create_url($img['uri']) . "</a></li>";
+            $i+=1;
+            if ($i == $max_files) break;
+        }
+    } else {
+        // get default images
+        $field = field_info_fields();
+        $uri = file_load($field['field_avtofoto']['settings']['default_image'])->uri;
+        $imgArray[] = drupal_realpath($uri);
+        $output .= "<li><a href=" . file_create_url($uri) . ">" . file_create_url($uri) . "</a></li>";
+    }
+    $output .= "</ul>";
+    return array("output" => $output, "array" => $imgArray);
+} 
+//-------------------------------------------------------
+
+
+/**
+ * Implemented functions Integrate VK API for hook_node_
+ */
+// -------------------------------------------------------
+function uploadProduct($node) {
+    $nid = $node->nid;
+    $name = getProductTitle($node);
+    $status = (int) !$node->status;
+    $description = getProductDescriprion($node);
+    $price = getProductPrice($node);
+    // get files by fid
+    $files = getFilesByFid($node);
+
+    $IntegrateVK = getObjIntegrateVK();
+
+    $res_add = $IntegrateVK->addProduct($nid, $name, $status, $description, $price, $files);
+
+    // message
+    if ($res_add->state_response === "error") {
+        $text_error = $res_add->res;
+        $message = "Товар ". $node->title . " не добавлен" . PHP_EOL;
+        $message .= "Ошибка: " . $text_error;
+    } else {
+        $message = "Товар " . $node->title . " загружен в вк. ";
+        // записать значение item_id из vk
+        $node->field_integratevk_item_id["und"][0]["value"] = $res_add->res->response->market_item_id;
+        field_attach_update('node', $node);
+        // добавить товар в подборку
+        $message .= PHP_EOL . addProductInCategory($node);
+    }
+
+    return $message;
+}
+
+
+function delProduct($node) {
+    $IntegrateVK = getObjIntegrateVK();
+
+    if (isset($node->field_integratevk_item_id["und"][0]["value"])) {
+        $item_id_vk = $node->field_integratevk_item_id["und"][0]["value"];
+        $nid = $node->nid;
+        $name = getProductTitle($node);
+
+        $res_del = $IntegrateVK->deleteProduct($nid, $name, $item_id_vk);
+        
+        // message
+        if ($res_del->state_response === "error") {
+            $text_error = $res_del->res;
+            $message = "Товар в вк: $name не удален " . PHP_EOL;
+            $message .= "Ошибка: " . $text_error;
+        } else {
+            $message = "Товар $name удален из вк";
+        }
+        return $message;
+    }
+
+}
+
+function editProduct($node) {
+    $IntegrateVK = getObjIntegrateVK();
+
+    if (isset($node->field_integratevk_item_id["und"][0]["value"])) {
+        $item_id_vk = $node->field_integratevk_item_id["und"][0]["value"];
+        $nid = $node->nid;
+        $name = getProductTitle($node);
+        $status = (int) !$node->status;
+        $description = getProductDescriprion($node);
+        $price = getProductPrice($node);
+        // get files by fid
+        $files = getFilesByFid($node);
+
+        $res_edit = $IntegrateVK->editProduct($item_id_vk, $name, $description, $price, $status, $files);
+        
+        
+        // message
+        if ($res_edit->state_response === "error") {
+            $text_error = $res_edit->res;
+            $message = "Товар в вк: $name обновлен " . PHP_EOL;
+            $message .= "Ошибка: " . $text_error. PHP_EOL;
+        } else {
+            $message = "Товар в вк: $name обновлен. ";
+        } 
+        return $message;
+    }
+
+}
+
+
+function addProductInCategory($node) {
+    $IntegrateVK = getObjIntegrateVK();
+
+    $name = $node->title;
+    $tid = $node->field_brend_avto['und'][0]['tid'];
+    $term = taxonomy_term_load($tid);
+    $album_name = getNameByTid($tid);
+
+    if (isset($term->field_integratevk_album_id['und'][0]['value'])) {
+        $album_id_vk = array($term->field_integratevk_album_id['und'][0]['value']);
+        $item_ids_vk = array($node->field_integratevk_item_id['und'][0]['value']);
+    
+        $res_addToAlbum = $IntegrateVK->addToAlbum($album_name, $item_ids_vk, $album_id_vk);
+    
+        // message
+        if ($res_addToAlbum->state_response === "error") {
+            $text_error = $res_addToAlbum->res;
+            $message = "Товар $name не добавлен в подборку $album_name вк" . PHP_EOL;
+            $message .= "Ошибка: " . $text_error;
+        } else {
+            $message = "Товар $name добавлен в подборку $album_name вк. ";
+            // записать значение response в in_album
+            $node->field_integratevk_in_album['und'][0]['value'] = $res_addToAlbum->res->response;
+            field_attach_update('node', $node);
+        }
+    }
+    return $message;
+}
+
+function changeProductCategory($node) {
+    $IntegrateVK = getObjIntegrateVK();
+    // взять предыдущее значение album_id (array)
+    $album_id_from = variable_get("old_val_album_id");
+    // взять новое значение album_id (array)
+    $album_id_to = variable_get("new_val_album_id");
+    $album_name = getNameByTid($node->field_brend_avto['und'][0]['tid']);
+
+    $name = getProductTitle($node);
+    $item_id_vk = $node->field_integratevk_item_id['und'][0]['value'];
+
+    $res_changeProductCategory = $IntegrateVK->changeProductCategory($item_id_vk, $album_id_from, $album_id_to);
+
+    // message
+    if ($res_changeProductCategory->state_response === "error") {
+        $text_error = $res_changeProductCategory->res;
+        $message = "Товар в вк: $name не перенесен в подборку $album_name. " . PHP_EOL;
+        $message .= "Ошибка: " . $text_error;
+    } else {
+        $message = "Товар в вк: $name перенесен в подборку $album_name. ";
+        // сохранить значение response в поле in_album
+       $node->field_integratevk_in_album['und'][0]['value'] = $res_changeProductCategory->res->res->response;   
+       field_attach_update('node', $node);
+    }
+
+    return $message;
+}
+
+
+
+/**
+ * Extra functions
+ */
+// ----- function for editProduct(), uploadProduct()
+function getFilesByFid($node){
+    $photo = $node->field_avtofoto['und'];
+    $files = [];
+    foreach ($photo as $ph) {
+        $fid = $ph['fid'];
+        $imgpath = file_load($fid)->uri;
+        $file = drupal_realpath($imgpath);
+
+        $files[] = $file;
+    }
+    // if not images in field_avtofoto
+    if (count($files) == 0) {
+        // set default image
+        $field = field_info_fields();
+        $uri = file_load($field['field_avtofoto']['settings']['default_image'])->uri;
+        $files[] = drupal_realpath($uri);
+    }
+    return $files;
+}
+// -----  update_product_vk_submit()
+function getAlbum_id_vk($tid){
+    $album_id_vk = null;
+    if (isset($tid)) {
+        $term = taxonomy_term_load($tid);
+        if (isset($term->field_integratevk_album_id['und'][0]['value'])) {
+            $album_id_vk = $term->field_integratevk_album_id['und'][0]['value'];
+        } 
+        return $album_id_vk;
+    }
+}
+
+function convToArray($arrayNodes) {
+    $result = array();
+    foreach ($arrayNodes as $object)
+    {
+        $result[] = (array) $object;
+    }
+    return $result;
+};
+
+function getNameByTid($tid){
+    $taxonomyTermObject = taxonomy_term_load($tid);
+    return $taxonomyTermObject->name;
+}

@@ -1,0 +1,20 @@
+#logs-output {
+    height: 300px;
+    border: 1px solid #ccc;
+    overflow: auto;
+    padding: 13px;
+}
+#logs-output .log-error{
+    color: #8c2e0b;
+    padding: 5px 0px;
+}
+#logs-output .log-status{
+    padding: 5px 0px;
+}
+#logs-output .operation p {
+    margin: 0px;
+}
+
+#btn-add_categories-vk, #btn-add_products_in_categories-vk, #btn-del_categories-vk {
+    background: bisque;
+}

@@ -1,0 +1,12 @@
+
+name = Integrate vk
+description = Custom module. Интеграция с vk api.
+core = 7.x
+package = MirSaitov
+version = 1.0.0
+dependencies[] = block
+dependencies[] = text
+files[] = integrate_vk.module
+files[] = integrateVK.php
+files[] = integrate_vk.css
+configure = admin/vk_integrate
